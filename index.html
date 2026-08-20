@@ -8,7 +8,7 @@
   <!-- manifest 用当日日期做缓存破坏，保证新一天的课程立刻可见 -->
   <script>
     window.__AI_CB = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    document.write('<script src="data/manifest.js?_cb=' + window.__IPD_CB + '"><\/script>');
+    document.write('<script src="data/manifest.js?_cb=' + window.__AI_CB + '"><\/script>');
   </script>
 </head>
 <body>

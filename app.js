@@ -53,6 +53,8 @@
     DAYS = window.AI_DAYS || {};
     renderSidebar();
     updateProgress();
+    renderCalendar();
+    renderRecent30();
 
     var target = getUrlDate();
     if (target && DAYS[target]) {
@@ -115,6 +117,143 @@
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // ---------- 学习日历 + 近 30 天进度（移植自 IPD 学习室） ----------
+  function dayLevel(date) {
+    var sc = loadScore(date);
+    if (sc && sc.percent != null) {
+      if (sc.percent >= 90) return 3;   // 高分
+      if (sc.percent >= 60) return 2;   // 已考
+      return 1;                          // 已学（低分）
+    }
+    if (localStorage.getItem(refKey(date))) return 1;  // 只写了心得也算已学
+    return 0;                            // 未学
+  }
+
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+  }
+
+  function dateOffset(base, delta) {
+    // delta = -29..0，过去 30 天到今天
+    var d = new Date(base + "T00:00:00");
+    d.setDate(d.getDate() + delta);
+    return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+  }
+
+  // ---------- 近 30 天整体进度（横向 30 格热力条） ----------
+  function renderRecent30() {
+    var box = $("recent30Box");
+    if (!box) return;
+    var today = todayStr();
+    var studied = 0, scoredDays = 0, totalScore = 0;
+    var html = '<div class="recent30-title">📊 近 30 天 · 整体进度</div>';
+    html += '<div class="recent30-grid">';
+    for (var i = 29; i >= 0; i--) {
+      var ds = dateOffset(today, -i);
+      var in30 = MANIFEST.some(function (m) { return m.date === ds; });
+      var lv = in30 ? dayLevel(ds) : -1;   // -1 表示非课程日
+      var m2 = MANIFEST.find(function (m) { return m.date === ds; });
+      var topic = (DAYS[ds] && DAYS[ds].topicTitle) || (m2 && m2.title) || "";
+      var short = topic.length > 4 ? topic.slice(0, 4) + "…" : topic;
+      var sc = in30 ? loadScore(ds) : null;
+      var isToday = (ds === today);
+      var hasRef = in30 ? !!localStorage.getItem(refKey(ds)) : false;
+      if (in30 && lv > 0) studied++;
+      if (in30 && sc && sc.percent != null) { scoredDays++; totalScore += sc.percent; }
+      var cls = "recent30-cell";
+      if (!in30) cls += " inactive";
+      else cls += " l" + lv;
+      if (isToday) cls += " today";
+      if (hasRef) cls += " hasref";
+      var tip = ds + (topic ? " · " + topic : "") + (sc && sc.percent != null ? " · 得分 " + sc.percent + "%" : (in30 ? " · 未考" : " · 非课程日")) + (hasRef ? " · 有心得" : "");
+      var inner = '<span class="r-date">' + parseInt(ds.slice(-2), 10) + '</span>';
+      if (in30 && sc && sc.percent != null) inner += '<span class="r-score">' + sc.percent + '</span>';
+      inner += short ? '<span class="r-topic">' + escapeHtml(short) + '</span>' : '';
+      html += '<div class="' + cls + '" data-date="' + ds + '" title="' + escapeHtml(tip) + '">' + inner + '</div>';
+    }
+    html += '</div>';
+    var avg = scoredDays ? Math.round(totalScore / scoredDays) : 0;
+    html += '<div class="recent30-stats">已学 <b>' + studied + '</b> / 30 天 · 已考 <b>' + scoredDays + '</b> 天 · 平均分 <b>' + avg + '</b>%</div>';
+    box.innerHTML = html;
+    box.querySelectorAll("[data-date]").forEach(function (c) {
+      var d = c.dataset.date;
+      if (MANIFEST.some(function (m) { return m.date === d; })) {
+        c.style.cursor = "pointer";
+        c.onclick = function () { openDay(d); };
+      }
+    });
+  }
+
+  function computeStreak() {
+    var n = 0;
+    for (var i = MANIFEST.length - 1; i >= 0; i--) {
+      if (dayLevel(MANIFEST[i].date) > 0) n++; else break;
+    }
+    return n;
+  }
+
+  function renderCalendar() {
+    var box = $("calendarBox");
+    if (!box || !MANIFEST.length) return;
+    var studied = 0;
+    MANIFEST.forEach(function (m) { if (dayLevel(m.date) > 0) studied++; });
+    var streak = computeStreak();
+    var today = todayStr();
+    var dateMap = {};
+    var months = {};
+    MANIFEST.forEach(function (m) {
+      dateMap[m.date] = m;
+      var mo = m.date.slice(0, 7);
+      if (!months[mo]) months[mo] = [];
+      months[mo].push(m.date);
+    });
+    var html = '<div class="cal-head">' +
+      '<div class="cal-title">📅 学习日历</div>' +
+      '<div class="cal-stats">' +
+      '<span class="cal-stat">已学 <b>' + studied + '/' + MANIFEST.length + '</b> 天</span>' +
+      '<span class="cal-stat streak">连续打卡 <b>' + streak + '</b> 天</span>' +
+      '</div></div>';
+    Object.keys(months).sort().forEach(function (mo) {
+      var y = parseInt(mo.slice(0, 4), 10), m = parseInt(mo.slice(5, 7), 10);
+      var lead = new Date(y, m - 1, 1).getDay();
+      var wd = (lead === 0) ? 6 : lead - 1;      // 转成周一=0
+      var dim = new Date(y, m, 0).getDate();
+      html += '<div class="cal-month"><div class="cal-month-title">' + y + ' 年 ' + m + ' 月</div><div class="cal-grid">';
+      ["一", "二", "三", "四", "五", "六", "日"].forEach(function (w) { html += '<span class="cal-wd">' + w + '</span>'; });
+      for (var i = 0; i < wd; i++) html += '<span class="cal-cell off"></span>';
+      for (var d = 1; d <= dim; d++) {
+        var dateStr = mo + "-" + (d < 10 ? "0" + d : d);
+        var m2 = dateMap[dateStr];
+        if (!m2) { html += '<span class="cal-cell off">' + d + '</span>'; continue; }
+        var lv = dayLevel(dateStr);
+        var hasRef = !!localStorage.getItem(refKey(dateStr));
+        var isToday = (dateStr === today);
+        var sc = loadScore(dateStr);
+        var topic = (DAYS[dateStr] && DAYS[dateStr].topicTitle) || m2.title || "";
+        var short = topic.length > 6 ? topic.slice(0, 6) + "…" : topic;   // 放宽到 6 字
+        var scoreLabel = (lv >= 2 && sc && sc.percent != null)
+          ? '<span class="cal-score">' + sc.percent + '</span>' : '';
+        var tip = "Day " + (DAYS[dateStr] ? DAYS[dateStr].day : "") + " · " + topic + " · " + (sc && sc.percent != null ? "得分 " + sc.percent + "%" : (hasRef ? "已学" : "未学")) + (hasRef ? " · 有心得" : "");
+        html += '<button class="cal-cell l' + lv + (isToday ? " today" : "") + (hasRef ? " hasref" : "") + '" data-date="' + dateStr + '" title="' + escapeHtml(tip) + '">' +
+          '<span class="cal-date">' + d + '</span>' +
+          (short ? '<span class="cal-topic">' + escapeHtml(short) + '</span>' : '') +
+          scoreLabel +
+          '</button>';
+      }
+      html += '</div></div>';
+    });
+    html += '<div class="cal-legend">' +
+      '<span><i class="lg l0"></i>未学</span><span><i class="lg l1"></i>已学</span>' +
+      '<span><i class="lg l2"></i>已考</span><span><i class="lg l3"></i>高分 ≥90%</span>' +
+      '<span><i class="lg ref"></i>有心得</span>' +
+      '<span class="cal-tip">点格子跳转当天 · 数据自动保存于本浏览器</span></div>';
+    box.innerHTML = html;
+    box.querySelectorAll("[data-date]").forEach(function (btn) {
+      btn.onclick = function () { openDay(btn.dataset.date); };
     });
   }
 
@@ -367,6 +506,8 @@
     saveScore(d.date, sc);
     scheduleAutoBackup();
     renderExam(d);
+    renderCalendar();
+    renderRecent30();
   }
 
   function recalcTotals(d, sc) {
@@ -418,6 +559,8 @@
         localStorage.setItem(refKey(date), JSON.stringify({ text: text, at: Date.now() }));
         $("refSaved").textContent = "已保存：" + new Date().toLocaleString();
         renderSidebar();
+        renderCalendar();
+        renderRecent30();
       } catch (e) { $("refSaved").textContent = "保存失败（浏览器存储不可用）"; }
     };
   }
@@ -513,6 +656,7 @@
           if (dd.ans) localStorage.setItem(examAnsKey(d), JSON.stringify(dd.ans));
         });
         renderSidebar(); updateProgress();
+        renderCalendar(); renderRecent30();
         if (currentDate) { renderExam(DAYS[currentDate]); renderReflection(currentDate); }
         alert("档案已导入：共恢复 " + Object.keys(data.days).length + " 天的数据");
         scheduleAutoBackup();
@@ -554,6 +698,7 @@
     }
     if (!imported) { $("importMsg").textContent = "没识别到 ipd_ 开头的数据，请确认粘贴内容来自 DevTools 的 localStorage"; return; }
     renderSidebar(); updateProgress();
+    renderCalendar(); renderRecent30();
     if (currentDate) { renderExam(DAYS[currentDate]); renderReflection(currentDate); }
     $("importMsg").textContent = "✅ 成功恢复 " + imported + " 条数据，已合并进本浏览器（原有数据不会被覆盖）";
     scheduleAutoBackup();

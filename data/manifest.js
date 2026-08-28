@@ -6,5 +6,7 @@ window.AI_MANIFEST = [
   { date: "2026-08-23", day: 4, title: "技能的成长与反模式：references 组织 + 4 个致命坑", topicIndex: 3 },
   { date: "2026-08-24", day: 5, title: "从技能到专家到自动化：AI 应用的三种武器怎么选", topicIndex: 4 },
   { date: "2026-08-25", day: 6, title: "采购审计技能：应招未招 / 指定采购风险点识别", topicIndex: 5 },
-  { date: "2026-08-26", day: 7, title: "反舞弊调查技能：事实 vs 推论推理框架", topicIndex: 6 }
+  { date: "2026-08-26", day: 7, title: "反舞弊调查技能：事实 vs 推论推理框架", topicIndex: 6 },
+  { date: "2026-08-27", day: 8, title: "审计报告技能：问题定位 7 把尺子实战", topicIndex: 7 },
+  { date: "2026-08-28", day: 9, title: "证据管理技能：证据链与可信度评分", topicIndex: 8 }
 ];

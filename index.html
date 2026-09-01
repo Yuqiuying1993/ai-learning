@@ -3,12 +3,30 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI 应用提效 · 每日学习室</title>
+  <title>AI 应用提效 · 审计人工作流学习室</title>
   <link rel="stylesheet" href="styles.css" />
-  <!-- manifest 用当日日期做缓存破坏，保证新一天的课程立刻可见 -->
   <script>
-    window.__AI_CB = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    document.write('<script src="data/manifest.js?_cb=' + window.__AI_CB + '"><\/script>');
+    window.__SITE_CB = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    // ---- 站点配置：两站共用同一份 app.js，仅此处不同 ----
+    window.SITE = {
+      keyPrefix: "ai",
+      brandTitle: "AI 应用提效 · 审计人工作流学习室",
+      brandSub: "给审计人的 AI 工具实战 · AI能力镜 × 审计场景镜 × 工作流镜",
+      logo: "🤖",
+      manifestVar: "AI_MANIFEST",
+      daysVar: "AI_DAYS",
+      planVar: "AI_PLAN",
+      workbookVar: "AI_WORKBOOK",
+      baseUrl: "https://ruijie.feishu.cn/base/NjQYbJ2VIakvjWsFZCKcxB92nCe",
+      archiveName: "AI学习档案",
+      phases: ["基础校准", "审计场景实战", "工作流化合"],
+      phaseDesc: {
+        "基础校准": "把 AI 工具与提示词基本功打牢，先不急着上业务",
+        "审计场景实战": "3 个递进审计场景，全真模拟用 AI 提效",
+        "工作流化合": "把 AI 嵌入日常审计流程，沉淀个人工具箱"
+      }
+    };
+    document.write('<script src="data/manifest.js?_cb=' + window.__SITE_CB + '"><\/script>');
   </script>
 </head>
 <body>
@@ -16,13 +34,14 @@
     <div class="brand">
       <span class="logo">🤖</span>
       <div>
-        <div class="brand-title">AI 应用提效 · 每日学习室</div>
-        <div class="brand-sub">用 WorkBuddy 学 AI 应用提效 · 审计人专属</div>
+        <div class="brand-title">AI 应用提效 · 审计人工作流学习室</div>
+        <div class="brand-sub">AI能力镜 × 审计场景镜 × 工作流镜</div>
       </div>
     </div>
     <div class="top-actions">
-      <button class="ghost-btn" id="teamBoardBtn" title="打开团队排行榜（飞书多维表格，需先对团队共享）">🏆 团队榜</button>
-      <button class="ghost-btn" id="exportBtn" title="导出学习档案（分数+心得+简答作答）">📦 导出</button>
+      <button class="ghost-btn" id="workbookBtn" title="打开场景工作簿（汇总 3 个场景的实战作答）">📒 场景工作簿</button>
+      <button class="ghost-btn" id="teamBoardBtn" title="打开团队排行榜（飞书多维表格）">🏆 团队榜</button>
+      <button class="ghost-btn" id="exportBtn" title="导出学习档案">📦 导出</button>
       <button class="ghost-btn" id="importBtn" title="从备份文件恢复学习档案">📥 导入</button>
       <input type="file" id="importFile" accept="application/json" hidden />
       <span class="backup-badge" id="backupBadge" title="每次保存会自动把整套档案下载到你的下载文件夹；换网址后用「📥 导入」选中该文件即可恢复">☁️ 自动备份已开启</span>
@@ -30,26 +49,33 @@
     </div>
   </header>
 
+  <!-- 三镜理念条 -->
+  <div class="lens-bar">
+    <div class="lens lens-a3">🔷 AI能力镜<small>理解工具边界</small></div>
+    <div class="lens-arrow">×</div>
+    <div class="lens lens-audit">🟣 审计场景镜<small>真实业务痛点</small></div>
+    <div class="lens-arrow">×</div>
+    <div class="lens lens-job">🟠 工作流镜<small>嵌入日常流程</small></div>
+  </div>
+
   <div class="layout">
     <aside class="sidebar">
       <div class="sidebar-head">
-        <span>课程日历</span>
+        <span>课程目录（按阶段）</span>
         <button class="ghost-btn" id="showAllRefBtn" title="查看全部心得">💡 全部心得</button>
       </div>
       <nav class="day-list" id="dayList"></nav>
       <div class="sidebar-tip">
-        内容每日 08:50 由「AI 应用教练」专家生成并经飞书推送，同时写入本网页，便于随时复习。
+        内容全部开放，自定进度练习。每天一段「学习 + 演练/小测 + 场景 + 心得」，成绩与作答自动保存在本浏览器。
       </div>
     </aside>
 
     <main class="content" id="content">
       <div class="plan-box" id="planBox"></div>
-      <div class="recent30-box" id="recent30Box"></div>
-      <div class="calendar-box" id="calendarBox"></div>
 
       <div class="today-banner" id="todayBanner" hidden>
         <div class="today-left">
-          <span class="today-label">📌 今日主题</span>
+          <span class="today-label">📌 最后一天</span>
           <div class="today-title" id="todayTitle"></div>
           <div class="today-one" id="todayOne"></div>
         </div>
@@ -57,8 +83,8 @@
       </div>
 
       <div class="empty-state" id="emptyState">
-        <div class="empty-emoji">📚</div>
-        <p>从左侧选择一天开始学习</p>
+        <div class="empty-emoji">🤖</div>
+        <p>从左侧选择一天开始练习 · 或点上方「📒 场景工作簿」看汇总</p>
       </div>
 
       <article class="lesson" id="lesson" hidden>
@@ -72,19 +98,17 @@
 
         <nav class="tabs" id="tabs">
           <button class="tab active" data-tab="learning">📖 学习</button>
+          <button class="tab" data-tab="drill" hidden>🔍 演练</button>
           <button class="tab" data-tab="exam">✏️ 考试</button>
-          <button class="tab" data-tab="ai">🤖 今日AI速览</button>
-          <button class="tab" data-tab="case">🔍 案例研讨</button>
-          <button class="tab" data-tab="output">🏗️ 每周产出物</button>
+          <button class="tab" data-tab="case">📂 场景</button>
           <button class="tab" data-tab="resources">📚 拓展</button>
           <button class="tab" data-tab="reflection">💡 心得</button>
         </nav>
 
         <section class="panel" id="panel-learning"></section>
+        <section class="panel" id="panel-drill" hidden></section>
         <section class="panel" id="panel-exam" hidden></section>
-        <section class="panel" id="panel-ai" hidden></section>
         <section class="panel" id="panel-case" hidden></section>
-        <section class="panel" id="panel-output" hidden></section>
         <section class="panel" id="panel-resources" hidden></section>
         <section class="panel" id="panel-reflection" hidden></section>
       </article>
@@ -99,6 +123,17 @@
         <button class="ghost-btn" id="closeAllRef">✕</button>
       </div>
       <div class="modal-body" id="allRefBody"></div>
+    </div>
+  </div>
+
+  <!-- 场景工作簿弹窗 -->
+  <div class="modal" id="workbookModal" hidden>
+    <div class="modal-box modal-wide">
+      <div class="modal-head">
+        <h3>📒 场景工作簿 · 三个递进审计场景</h3>
+        <button class="ghost-btn" id="closeWorkbook">✕</button>
+      </div>
+      <div class="modal-body" id="workbookBody"></div>
     </div>
   </div>
 
@@ -140,7 +175,7 @@
           <li>在<b>旧网址</b>打开网页，按 <code>F12</code> → Console，输入 <code>copy(JSON.stringify(localStorage))</code> 回车（自动复制全部成绩/心得）。</li>
           <li>把下面文本框<b>粘贴</b>进去，点「从粘贴内容导入」。</li>
         </ol>
-        <textarea id="importText" rows="6" class="short-input" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,Consolas,monospace;font-size:12px;" placeholder='粘贴此处，例如：{"ai_score_2026-08-20":"{...}","ai_reflection_2026-08-20":"{...}"}'></textarea>
+        <textarea id="importText" rows="6" class="short-input" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,Consolas,monospace;font-size:12px;" placeholder='粘贴此处，例如：{"ai_score_2026-08-15":"{...}","ai_reflection_2026-08-15":"{...}"}'></textarea>
         <div class="exam-actions" style="margin-top:10px">
           <button class="btn btn-primary" id="importTextBtn">从粘贴内容导入</button>
           <span class="ref-saved" id="importMsg"></span>
@@ -149,7 +184,6 @@
     </div>
   </div>
 
-  <script src="data/plan.js"></script>
-  <script src="app.js"></script>
+  <script>document.write('<script src="data/workbook.js?_cb=' + window.__SITE_CB + '"><\/script>');document.write('<script src="app.js?_cb=' + window.__SITE_CB + '"><\/script>');</script>
 </body>
 </html>

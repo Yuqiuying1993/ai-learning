@@ -1,22 +1,27 @@
 (function () {
   "use strict";
 
-  var DAYS = window.AI_DAYS || {};
-  var MANIFEST = window.AI_MANIFEST || [];
-  var PLAN = window.AI_PLAN || [];
+  // ---------- 站点配置（每个站点 index.html 注入 window.SITE）----------
+  var SITE = window.SITE || {};
+  var KEY = SITE.keyPrefix || "a3";
+  var DAYS = window[SITE.daysVar || "A3_DAYS"] || {};
+  var MANIFEST = window[SITE.manifestVar || "A3_MANIFEST"] || [];
+  var PLAN = window[SITE.planVar || "A3_PLAN"] || [];
+  var WORKBOOK = window[SITE.workbookVar || "A3_WORKBOOK"] || [];
+  var PHASES = SITE.phases || ["校准", "演练", "化合"];
+  var PHASE_DESC = SITE.phaseDesc || {};
   var currentDate = null;
   var BATCH = 5;            // 每关题数
   var viewBatch = 0;        // 当前解锁到的批次（0-based）
 
-  // 团队共享榜（飞书多维表格）。留空表示尚未配置；配置后同事即可看榜+上报。
+  // 团队共享榜（飞书多维表格）。如需更换，改这里即可。
   var CONFIG = {
-    BASE_URL: ""
+    BASE_URL: SITE.baseUrl || "https://ruijie.feishu.cn/base/NjQYbJ2VIakvjWsFZCKcxB92nCe"
   };
 
   // ---------- 数据加载 ----------
-  // 用当日日期做缓存破坏：每天第一次访问强制拉最新 manifest/数据文件
   function cacheBust(src) {
-    var cb = window.__AI_CB || new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    var cb = window.__SITE_CB || new Date().toISOString().slice(0, 10).replace(/-/g, "");
     return src + (src.indexOf("?") >= 0 ? "&" : "?") + "_cb=" + cb;
   }
 
@@ -35,6 +40,96 @@
     return m ? decodeURIComponent(m[1]) : null;
   }
 
+  async function boot() {
+    if (!MANIFEST.length) { setProgress("暂无课程数据"); return; }
+    for (var i = 0; i < MANIFEST.length; i++) {
+      await loadScript("data/" + MANIFEST[i].date + ".js");
+    }
+    DAYS = window[SITE.daysVar || "A3_DAYS"] || {};
+    renderSidebar();
+    renderPlan();
+    renderTodayBanner();
+    updateProgress();
+
+    var target = getUrlDate();
+    if (target && DAYS[target]) {
+      openDay(target);
+    }
+  }
+
+  // ---------- 工具 ----------
+  function $(id) { return document.getElementById(id); }
+  function setProgress(txt) { $("progressPill").textContent = txt; }
+  function scoreKey(d) { return KEY + "_score_" + d; }
+  function refKey(d) { return KEY + "_reflection_" + d; }
+  function examAnsKey(d) { return KEY + "_examans_" + d; }
+  function drillKey(d) { return KEY + "_drill_" + d; }
+
+  function loadScore(date) { try { return JSON.parse(localStorage.getItem(scoreKey(date)) || "null"); } catch (e) { return null; } }
+  function saveScore(date, obj) { try { localStorage.setItem(scoreKey(date), JSON.stringify(obj)); } catch (e) {} }
+  function loadAns(date) { try { return JSON.parse(localStorage.getItem(examAnsKey(date)) || "{}"); } catch (e) { return {}; } }
+  function saveAns(date, map) { try { localStorage.setItem(examAnsKey(date), JSON.stringify(map)); } catch (e) {} }
+  function loadDrill(date) { try { return JSON.parse(localStorage.getItem(drillKey(date)) || "null"); } catch (e) { return null; } }
+  function saveDrill(date, txt) { try { localStorage.setItem(drillKey(date), JSON.stringify({ text: txt, at: Date.now() })); } catch (e) {} }
+
+  function updateProgress() {
+    var studied = MANIFEST.length;
+    var list = MANIFEST.map(function (m) { return loadScore(m.date); }).filter(Boolean);
+    if (!list.length) { setProgress("已备 " + studied + " 天课程 · 自定进度开练"); return; }
+    var sum = 0, cnt = 0;
+    list.forEach(function (s) { if (s.percent != null) { sum += s.percent; cnt++; } });
+    var avg = cnt ? Math.round(sum / cnt) : 0;
+    setProgress("已学 " + studied + " 天 · 平均得分 " + avg + "%");
+  }
+
+  // ---------- 学习日历（首页顶部） ----------
+  function dayLevel(date) {
+    var sc = loadScore(date);
+    if (sc && sc.percent != null) {
+      if (sc.percent >= 90) return 3;
+      if (sc.percent >= 60) return 2;
+      return 1;
+    }
+    if (localStorage.getItem(refKey(date))) return 1;
+    if (localStorage.getItem(drillKey(date))) return 1;
+    return 0;
+  }
+
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+  }
+
+  // ---------- 三阶段总览（首页顶部） ----------
+  function renderPlan() {
+    var box = $("planBox");
+    if (!box) return;
+    var html = '<div class="plan-head">' +
+      '<div class="plan-title">🧭 三阶段学习地图</div>' +
+      '<div class="plan-sub">校准思维 · 全真演练 · 三镜化合，自定进度往前走</div></div>';
+    PHASES.forEach(function (ph) {
+      var days = MANIFEST.filter(function (m) { return (DAYS[m.date] && DAYS[m.date].phase) === ph || (m.phase === ph); });
+      var done = days.filter(function (m) { return dayLevel(m.date) > 0; }).length;
+      html += '<div class="plan-phase-row" data-phase="' + ph + '">' +
+        '<div class="plan-phase-badge p-' + PHASES.indexOf(ph) + '">' + escapeHtml(ph) + '</div>' +
+        '<div class="plan-phase-body"><div class="plan-phase-name">' + escapeHtml(ph) +
+        (PHASE_DESC[ph] ? '<span class="plan-phase-desc">' + escapeHtml(PHASE_DESC[ph]) + '</span>' : '') +
+        '</div>' +
+        '<div class="plan-phase-bar"><div class="plan-phase-fill p-' + PHASES.indexOf(ph) + '" style="width:' +
+        (days.length ? Math.round(done / days.length * 100) : 0) + '%"></div></div>' +
+        '<div class="plan-phase-meta">本阶段 ' + days.length + ' 天 · 已开练 ' + done + ' 天</div></div>' +
+        '</div>';
+    });
+    box.innerHTML = html;
+    box.querySelectorAll("[data-phase]").forEach(function (r) {
+      r.style.cursor = "pointer";
+      r.onclick = function () {
+        var first = MANIFEST.find(function (m) { return (DAYS[m.date] && DAYS[m.date].phase) === r.dataset.phase || m.phase === r.dataset.phase; });
+        if (first) openDay(first.date);
+      };
+    });
+  }
+
   function renderTodayBanner() {
     var latest = MANIFEST[MANIFEST.length - 1];
     if (!latest) return;
@@ -46,67 +141,42 @@
     $("startTodayBtn").onclick = function () { openDay(latest.date); };
   }
 
-  async function boot() {
-    if (!MANIFEST.length) { setProgress("暂无课程数据"); return; }
-    for (var i = 0; i < MANIFEST.length; i++) {
-      await loadScript("data/" + MANIFEST[i].date + ".js");
-    }
-    DAYS = window.AI_DAYS || {};
-    renderSidebar();
-    updateProgress();
-    renderCalendar();
-    renderRecent30();
-    renderPlan();
-
-    var target = getUrlDate();
-    if (target && DAYS[target]) {
-      openDay(target);
-    } else {
-      renderTodayBanner();
-    }
-  }
-
-  // ---------- 工具 ----------
-  function $(id) { return document.getElementById(id); }
-  function setProgress(txt) { $("progressPill").textContent = txt; }
-  function scoreKey(d) { return "ai_score_" + d; }
-  function refKey(d) { return "ai_reflection_" + d; }
-  function examAnsKey(d) { return "ai_examans_" + d; }
-
-  function loadScore(date) { try { return JSON.parse(localStorage.getItem(scoreKey(date)) || "null"); } catch (e) { return null; } }
-  function saveScore(date, obj) { try { localStorage.setItem(scoreKey(date), JSON.stringify(obj)); } catch (e) {} }
-  function loadAns(date) { try { return JSON.parse(localStorage.getItem(examAnsKey(date)) || "{}"); } catch (e) { return {}; } }
-  function saveAns(date, map) { try { localStorage.setItem(examAnsKey(date), JSON.stringify(map)); } catch (e) {} }
-
-  function updateProgress() {
-    var studied = MANIFEST.length;
-    var list = MANIFEST.map(function (m) { return loadScore(m.date); }).filter(Boolean);
-    if (!list.length) { setProgress("已备 " + studied + " 天课程 · 待开考"); return; }
-    var sum = 0, cnt = 0;
-    list.forEach(function (s) { if (s.percent != null) { sum += s.percent; cnt++; } });
-    var avg = cnt ? Math.round(sum / cnt) : 0;
-    setProgress("已学 " + studied + " 天 · 平均得分 " + avg + "%");
-  }
-
-  // ---------- 侧边栏 ----------
+  // ---------- 侧边栏（按阶段分组） ----------
   function renderSidebar() {
     var list = $("dayList");
     list.innerHTML = "";
-    MANIFEST.forEach(function (m) {
-      var d = DAYS[m.date];
-      var score = loadScore(m.date);
-      var hasRef = !!localStorage.getItem(refKey(m.date));
-      var btn = document.createElement("button");
-      btn.className = "day-item";
-      btn.dataset.date = m.date;
-      var badge = score
-        ? '<span class="score-badge">' + score.score + "/" + score.total + "</span>"
-        : '<span class="score-badge none">未考</span>';
-      btn.innerHTML =
-        '<div class="di-top"><span class="di-day">Day ' + m.day + '</span>' + badge + "</div>" +
-        '<div class="di-title">' + escapeHtml(m.title) + (hasRef ? '<span class="ref-dot" title="已写心得"></span>' : "") + "</div>";
-      btn.onclick = function () { openDay(m.date); };
-      list.appendChild(btn);
+    PHASES.forEach(function (ph) {
+      var items = MANIFEST.filter(function (m) {
+        return (DAYS[m.date] && DAYS[m.date].phase) === ph || m.phase === ph;
+      });
+      if (!items.length) return;
+      var grp = document.createElement("div");
+      grp.className = "day-group";
+      var head = document.createElement("div");
+      head.className = "day-group-head p-" + PHASES.indexOf(ph);
+      head.innerHTML = '<span class="dg-dot"></span>' + escapeHtml(ph) +
+        '<span class="dg-count">' + items.length + '</span>';
+      grp.appendChild(head);
+      items.forEach(function (m) {
+        var d = DAYS[m.date];
+        var score = loadScore(m.date);
+        var hasRef = !!localStorage.getItem(refKey(m.date));
+        var hasDrill = !!localStorage.getItem(drillKey(m.date));
+        var btn = document.createElement("button");
+        btn.className = "day-item";
+        btn.dataset.date = m.date;
+        var badge = score
+          ? '<span class="score-badge">' + score.score + "/" + score.total + "</span>"
+          : '<span class="score-badge none">未考</span>';
+        var dots = (hasRef ? '<span class="ref-dot" title="已写心得"></span>' : "") +
+          (hasDrill ? '<span class="drill-dot" title="已写演练作答"></span>' : "");
+        btn.innerHTML =
+          '<div class="di-top"><span class="di-day">Day ' + m.day + '</span>' + badge + "</div>" +
+          '<div class="di-title">' + escapeHtml(m.title) + dots + "</div>";
+        btn.onclick = function () { openDay(m.date); };
+        grp.appendChild(btn);
+      });
+      list.appendChild(grp);
     });
   }
 
@@ -122,189 +192,6 @@
     });
   }
 
-  // ---------- 学习日历 + 近 30 天进度（移植自 IPD 学习室） ----------
-  function dayLevel(date) {
-    var sc = loadScore(date);
-    if (sc && sc.percent != null) {
-      if (sc.percent >= 90) return 3;   // 高分
-      if (sc.percent >= 60) return 2;   // 已考
-      return 1;                          // 已学（低分）
-    }
-    if (localStorage.getItem(refKey(date))) return 1;  // 只写了心得也算已学
-    return 0;                            // 未学
-  }
-
-  function todayStr() {
-    var d = new Date();
-    return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
-  }
-
-  function dateOffset(base, delta) {
-    // delta = -29..0，过去 30 天到今天
-    var d = new Date(base + "T00:00:00");
-    d.setDate(d.getDate() + delta);
-    return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
-  }
-
-  // ---------- 近 30 天整体进度（横向 30 格热力条） ----------
-  function renderRecent30() {
-    var box = $("recent30Box");
-    if (!box) return;
-    var today = todayStr();
-    var studied = 0, scoredDays = 0, totalScore = 0;
-    var html = '<div class="recent30-title">📊 近 30 天 · 整体进度</div>';
-    html += '<div class="recent30-grid">';
-    for (var i = 29; i >= 0; i--) {
-      var ds = dateOffset(today, -i);
-      var in30 = MANIFEST.some(function (m) { return m.date === ds; });
-      var lv = in30 ? dayLevel(ds) : -1;   // -1 表示非课程日
-      var m2 = MANIFEST.find(function (m) { return m.date === ds; });
-      var topic = (DAYS[ds] && DAYS[ds].topicTitle) || (m2 && m2.title) || "";
-      var short = topic.length > 4 ? topic.slice(0, 4) + "…" : topic;
-      var sc = in30 ? loadScore(ds) : null;
-      var isToday = (ds === today);
-      var hasRef = in30 ? !!localStorage.getItem(refKey(ds)) : false;
-      if (in30 && lv > 0) studied++;
-      if (in30 && sc && sc.percent != null) { scoredDays++; totalScore += sc.percent; }
-      var cls = "recent30-cell";
-      if (!in30) cls += " inactive";
-      else cls += " l" + lv;
-      if (isToday) cls += " today";
-      if (hasRef) cls += " hasref";
-      var tip = ds + (topic ? " · " + topic : "") + (sc && sc.percent != null ? " · 得分 " + sc.percent + "%" : (in30 ? " · 未考" : " · 非课程日")) + (hasRef ? " · 有心得" : "");
-      var inner = '<span class="r-date">' + parseInt(ds.slice(-2), 10) + '</span>';
-      if (in30 && sc && sc.percent != null) inner += '<span class="r-score">' + sc.percent + '</span>';
-      inner += short ? '<span class="r-topic">' + escapeHtml(short) + '</span>' : '';
-      html += '<div class="' + cls + '" data-date="' + ds + '" title="' + escapeHtml(tip) + '">' + inner + '</div>';
-    }
-    html += '</div>';
-    var avg = scoredDays ? Math.round(totalScore / scoredDays) : 0;
-    html += '<div class="recent30-stats">已学 <b>' + studied + '</b> / 30 天 · 已考 <b>' + scoredDays + '</b> 天 · 平均分 <b>' + avg + '</b>%</div>';
-    box.innerHTML = html;
-    box.querySelectorAll("[data-date]").forEach(function (c) {
-      var d = c.dataset.date;
-      if (MANIFEST.some(function (m) { return m.date === d; })) {
-        c.style.cursor = "pointer";
-        c.onclick = function () { openDay(d); };
-      }
-    });
-  }
-
-  function computeStreak() {
-    var n = 0;
-    for (var i = MANIFEST.length - 1; i >= 0; i--) {
-      if (dayLevel(MANIFEST[i].date) > 0) n++; else break;
-    }
-    return n;
-  }
-
-  // ---------- 30 天学习计划（移植自 IPD 学习室：纯展示计划 + 叠加实际进度） ----------
-  function planDayOf(date) {
-    for (var i = 0; i < PLAN.length; i++) if (PLAN[i].date === date) return PLAN[i].day;
-    return null;
-  }
-
-  function renderPlan() {
-    var box = $("planBox");
-    if (!box || !PLAN.length) return;
-    var today = todayStr();
-    var todayDay = planDayOf(today);
-    var html = '<div class="plan-head">' +
-      '<div class="plan-title">📋 30 天学习计划</div>' +
-      '<div class="plan-sub">第 1 天 = 2026-08-20' + (todayDay ? ' · 今日 = Day ' + todayDay : '') + ' · 已学 ' +
-      PLAN.filter(function (p) { return dayLevel(p.date) > 0; }).length + '/' + PLAN.length + ' 天</div>' +
-      '</div>';
-    var curPhase = null;
-    PLAN.forEach(function (p) {
-      if (p.phase !== curPhase) {
-        curPhase = p.phase;
-        html += '<div class="plan-phase">' + escapeHtml(curPhase) + '</div>';
-      }
-      var lv = dayLevel(p.date);
-      var sc = loadScore(p.date);
-      var isToday = (p.date === today);
-      var studied = lv > 0;
-      var status = isToday ? "today" : (studied ? "done" : "future");
-      var statusLabel;
-      if (isToday) statusLabel = "今日";
-      else if (studied) statusLabel = (sc && sc.percent != null) ? (sc.percent + "%") : "已学";
-      else statusLabel = "待学";
-      var clickable = studied;   // 未来天无内容，不可跳转
-      html += '<div class="plan-row ' + status + (clickable ? " clickable" : "") + '"' +
-        (clickable ? ' data-date="' + p.date + '"' : '') + '>' +
-        '<span class="plan-day">Day ' + p.day + '</span>' +
-        '<span class="plan-date">' + p.date.slice(5) + '</span>' +
-        '<span class="plan-theme">' + escapeHtml(p.title) + '</span>' +
-        '<span class="plan-status ' + status + '">' + statusLabel + '</span>' +
-        '</div>';
-    });
-    box.innerHTML = html;
-    box.querySelectorAll("[data-date]").forEach(function (r) {
-      r.onclick = function () { openDay(r.dataset.date); };
-    });
-  }
-
-  function renderCalendar() {
-    var box = $("calendarBox");
-    if (!box || !MANIFEST.length) return;
-    var studied = 0;
-    MANIFEST.forEach(function (m) { if (dayLevel(m.date) > 0) studied++; });
-    var streak = computeStreak();
-    var today = todayStr();
-    var dateMap = {};
-    var months = {};
-    MANIFEST.forEach(function (m) {
-      dateMap[m.date] = m;
-      var mo = m.date.slice(0, 7);
-      if (!months[mo]) months[mo] = [];
-      months[mo].push(m.date);
-    });
-    var html = '<div class="cal-head">' +
-      '<div class="cal-title">📅 学习日历</div>' +
-      '<div class="cal-stats">' +
-      '<span class="cal-stat">已学 <b>' + studied + '/' + MANIFEST.length + '</b> 天</span>' +
-      '<span class="cal-stat streak">连续打卡 <b>' + streak + '</b> 天</span>' +
-      '</div></div>';
-    Object.keys(months).sort().forEach(function (mo) {
-      var y = parseInt(mo.slice(0, 4), 10), m = parseInt(mo.slice(5, 7), 10);
-      var lead = new Date(y, m - 1, 1).getDay();
-      var wd = (lead === 0) ? 6 : lead - 1;      // 转成周一=0
-      var dim = new Date(y, m, 0).getDate();
-      html += '<div class="cal-month"><div class="cal-month-title">' + y + ' 年 ' + m + ' 月</div><div class="cal-grid">';
-      ["一", "二", "三", "四", "五", "六", "日"].forEach(function (w) { html += '<span class="cal-wd">' + w + '</span>'; });
-      for (var i = 0; i < wd; i++) html += '<span class="cal-cell off"></span>';
-      for (var d = 1; d <= dim; d++) {
-        var dateStr = mo + "-" + (d < 10 ? "0" + d : d);
-        var m2 = dateMap[dateStr];
-        if (!m2) { html += '<span class="cal-cell off">' + d + '</span>'; continue; }
-        var lv = dayLevel(dateStr);
-        var hasRef = !!localStorage.getItem(refKey(dateStr));
-        var isToday = (dateStr === today);
-        var sc = loadScore(dateStr);
-        var topic = (DAYS[dateStr] && DAYS[dateStr].topicTitle) || m2.title || "";
-        var short = topic.length > 6 ? topic.slice(0, 6) + "…" : topic;   // 放宽到 6 字
-        var scoreLabel = (lv >= 2 && sc && sc.percent != null)
-          ? '<span class="cal-score">' + sc.percent + '</span>' : '';
-        var tip = "Day " + (DAYS[dateStr] ? DAYS[dateStr].day : "") + " · " + topic + " · " + (sc && sc.percent != null ? "得分 " + sc.percent + "%" : (hasRef ? "已学" : "未学")) + (hasRef ? " · 有心得" : "");
-        html += '<button class="cal-cell l' + lv + (isToday ? " today" : "") + (hasRef ? " hasref" : "") + '" data-date="' + dateStr + '" title="' + escapeHtml(tip) + '">' +
-          '<span class="cal-date">' + d + '</span>' +
-          (short ? '<span class="cal-topic">' + escapeHtml(short) + '</span>' : '') +
-          scoreLabel +
-          '</button>';
-      }
-      html += '</div></div>';
-    });
-    html += '<div class="cal-legend">' +
-      '<span><i class="lg l0"></i>未学</span><span><i class="lg l1"></i>已学</span>' +
-      '<span><i class="lg l2"></i>已考</span><span><i class="lg l3"></i>高分 ≥90%</span>' +
-      '<span><i class="lg ref"></i>有心得</span>' +
-      '<span class="cal-tip">点格子跳转当天 · 数据自动保存于本浏览器</span></div>';
-    box.innerHTML = html;
-    box.querySelectorAll("[data-date]").forEach(function (btn) {
-      btn.onclick = function () { openDay(btn.dataset.date); };
-    });
-  }
-
   // ---------- 打开某一天 ----------
   function openDay(date) {
     var d = DAYS[date];
@@ -315,7 +202,8 @@
     $("emptyState").hidden = true;
     $("todayBanner").hidden = true;
     $("lesson").hidden = false;
-    $("lessonTag").textContent = "Day " + d.day + " · 主题 #" + (d.topicIndex + 1);
+    var ph = d.phase || "";
+    $("lessonTag").textContent = (PHASES.indexOf(ph) >= 0 ? "【" + ph + "】" : "") + "Day " + d.day + " · 主题 #" + (d.topicIndex + 1);
     $("lessonTitle").textContent = d.topicTitle;
     $("lessonDate").textContent = date;
 
@@ -331,21 +219,74 @@
       adv += "</div>";
       $("panel-case").innerHTML += adv;
     }
-    $("panel-ai").innerHTML = d.aiBriefing || "<p>暂无今日 AI 速览</p>";
-    renderOutput(date);
     renderResources(d);
     renderReflection(date);
-    switchTab("learning");
+
+    // 演练面板（仅演练/化合阶段有 drill 字段）
+    var drillTab = document.querySelector('.tab[data-tab="drill"]');
+    if (d.drill) {
+      if (drillTab) drillTab.hidden = false;
+      renderDrill(d);
+    } else {
+      if (drillTab) drillTab.hidden = true;
+      $("panel-drill").innerHTML = "";
+    }
+
+    switchTab(d.drill ? "drill" : "learning");
   }
 
   // ---------- 标签页 ----------
   function switchTab(tab) {
+    var visible = ["learning", "exam", "case", "resources", "reflection"];
+    if (!$("panel-drill").innerHTML.trim() === "" ) {} // noop
     document.querySelectorAll(".tab").forEach(function (t) {
+      if (t.hidden) return;
       t.classList.toggle("active", t.dataset.tab === tab);
     });
-    ["learning", "exam", "ai", "case", "output", "resources", "reflection"].forEach(function (k) {
-      $("panel-" + k).hidden = (k !== tab);
+    ["learning", "drill", "exam", "case", "resources", "reflection"].forEach(function (k) {
+      var p = $("panel-" + k);
+      if (p) p.hidden = (k !== tab);
     });
+  }
+
+  // ---------- 演练面板（任务 / 我的作答 / 对照答案 / 判分尺）----------
+  function renderDrill(d) {
+    var box = $("panel-drill");
+    if (!d.drill) { box.innerHTML = ""; return; }
+    var dr = d.drill;
+    var saved = loadDrill(d.date);
+    var caseTag = dr.caseId ? '<span class="drill-case">📂 ' + escapeHtml(dr.caseTitle || dr.caseId) + '</span>' : '';
+    var html = '';
+    html += '<div class="drill-head"><span class="drill-section sec-' + (dr.section || "") + '">' + escapeHtml(dr.section || "演练") + '</span>' + caseTag + '</div>';
+    html += '<div class="drill-task"><div class="drill-task-label">🎯 今日任务</div>' + (dr.task || "") + '</div>';
+    html += '<div class="drill-do"><div class="drill-do-label">✍️ 我的作答（自动保存）</div>' +
+      '<textarea id="drillText" class="drill-textarea" placeholder="在这里写你的真实作答，网页会自动保存到本浏览器；案例工作簿会把它汇总起来。">' +
+      (saved ? escapeHtml(saved.text) : "") + '</textarea>' +
+      '<div class="exam-actions"><button class="btn btn-primary" id="saveDrill">保存作答</button>' +
+      '<span class="ref-saved" id="drillSaved"></span></div></div>';
+    html += '<div class="drill-ref"><button class="btn btn-ghost" id="toggleRef">👀 看对照答案 / 教练示范</button>' +
+      '<div class="drill-ref-body" id="drillRefBody" hidden>' + (dr.reference || "<p>（暂无对照）</p>") + '</div></div>';
+    if (dr.rubric && dr.rubric.length) {
+      html += '<div class="drill-rubric"><div class="drill-rubric-label">📏 判分尺（对照自测，每条做到打勾）</div><ul class="rubric-list">';
+      dr.rubric.forEach(function (r) {
+        html += '<li><label><input type="checkbox" class="rubric-cb"> ' + escapeHtml(r) + '</label></li>';
+      });
+      html += '</ul></div>';
+    }
+    box.innerHTML = html;
+
+    var ta = $("drillText");
+    ta.oninput = function () { /* 实时草稿不立刻弹备份，保存时再存 */ };
+    $("saveDrill").onclick = function () {
+      saveDrill(d.date, ta.value);
+      $("drillSaved").textContent = "已保存：" + new Date().toLocaleString();
+      renderSidebar(); renderPlan(); scheduleAutoBackup();
+    };
+    $("toggleRef").onclick = function () {
+      var b = $("drillRefBody");
+      b.hidden = !b.hidden;
+      this.textContent = b.hidden ? "👀 看对照答案 / 教练示范" : "🙈 收起对照答案";
+    };
   }
 
   // ---------- 考试（分批闯关）----------
@@ -387,7 +328,7 @@
         html += '<div class="exam-more"><button class="btn btn-primary" id="moreBtn">🎯 第 ' + (viewBatch + 1) + " 关已通关！还有精力？解锁第 " + (viewBatch + 2) + " 关（+" + batches[viewBatch + 1].length + " 题）▶</button></div>";
       }
     } else {
-      html += '<div class="exam-done">🎉 今日 ' + d.exam.length + " 题已全部解锁，明天见！</div>";
+      html += '<div class="exam-done">🎉 今日 ' + d.exam.length + " 题已全部解锁，去写心得吧！</div>";
     }
 
     box.innerHTML = html;
@@ -476,7 +417,6 @@
         renderExam(d);
       };
     });
-    // 简答题草稿实时保存（刷新不丢）
     document.querySelectorAll("#panel-exam .short-input").forEach(function (ta) {
       var idx = ta.dataset.abs;
       var ans = loadAns(d.date);
@@ -499,7 +439,7 @@
         var ta = document.querySelector('#panel-exam .short-input[data-abs="' + idx + '"]');
         var text = ta ? ta.value : "";
         res.text = text;
-        var ans = loadAns(dDate); ans[idx] = text; saveAns(dDate, ans); // 草稿留存
+        var ans = loadAns(dDate); ans[idx] = text; saveAns(dDate, ans);
         var qEl = document.querySelector('#panel-exam .exam-q[data-abs="' + idx + '"]');
         var gradeBox = qEl.querySelector(".self-grade");
         gradeBox.hidden = false;
@@ -553,10 +493,8 @@
     recalcTotals(d, sc);
     saveScore(d.date, sc);
     scheduleAutoBackup();
+    renderSidebar(); renderPlan();
     renderExam(d);
-    renderCalendar();
-    renderRecent30();
-    renderPlan();
   }
 
   function recalcTotals(d, sc) {
@@ -576,7 +514,7 @@
   function renderResources(d) {
     var box = $("panel-resources");
     if (!d.resources || !d.resources.length) { box.innerHTML = "<p>暂无拓展阅读</p>"; return; }
-    var html = '<p class="ref-hint">以下资源均经检索核对、链接真实可查，延伸理解 AI 应用与 WorkBuddy 技能体系：</p>';
+    var html = '<p class="ref-hint">以下资源均经检索核对、链接真实可查，延伸理解方法论：</p>';
     d.resources.forEach(function (r) {
       html += '<div class="res-card">' +
         '<div class="res-top">' + escapeHtml(r.type || "📌") + " " + escapeHtml(r.title) + "</div>" +
@@ -592,7 +530,7 @@
   function renderReflection(date) {
     var box = $("panel-reflection");
     box.innerHTML =
-      '<p class="ref-hint">记录今天的学习心得、疑问或行动点。内容保存在本浏览器本地，便于后续复盘（左侧「全部心得」可统一查看；顶部「导出」可备份）。</p>' +
+      '<p class="ref-hint">记录今天的学习心得、疑问或行动点。内容保存在本浏览器本地，便于后续复盘（左侧可统一查看；顶部「导出」可备份）。</p>' +
       '<div class="ref-box"><textarea id="refText" placeholder="今天印象最深的一点是什么？有什么可以马上用到审计工作里的？"></textarea></div>' +
       '<div class="exam-actions"><button class="btn btn-primary" id="saveRef">保存心得</button>' +
       '<span class="ref-saved" id="refSaved"></span></div>';
@@ -607,10 +545,7 @@
       try {
         localStorage.setItem(refKey(date), JSON.stringify({ text: text, at: Date.now() }));
         $("refSaved").textContent = "已保存：" + new Date().toLocaleString();
-        renderSidebar();
-        renderCalendar();
-        renderRecent30();
-        renderPlan();
+        renderSidebar(); renderPlan();
       } catch (e) { $("refSaved").textContent = "保存失败（浏览器存储不可用）"; }
     };
   }
@@ -659,7 +594,7 @@
     var name = ($("reportName").value || "").trim() || "（未填姓名）";
     var dept = ($("reportDept").value || "").trim();
     var score = sc ? (sc.score + "/" + sc.total) : "未考试";
-    var line = "【AI学习上报】姓名：" + name + (dept ? "｜部门：" + dept : "") +
+    var line = "【" + (SITE.keyPrefix || "A3") + "学习上报】姓名：" + name + (dept ? "｜部门：" + dept : "") +
       "｜" + d.date + " Day" + d.day + " " + d.topicTitle + "｜得分 " + score;
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(line).then(
@@ -669,26 +604,53 @@
     } else {
       $("reportCopied").textContent = "请手动复制：" + line;
     }
-    if (!CONFIG.BASE_URL) {
-      $("reportCopied").textContent = "团队榜尚未配置，自评/成绩可直接发给豆包点评 ✓";
+    window.open(CONFIG.BASE_URL, "_blank");
+  }
+
+  // ---------- 案例工作簿（聚合 3 个递进案例的演练产出）----------
+  function openWorkbook() {
+    var body = $("workbookBody");
+    if (!WORKBOOK.length) {
+      body.innerHTML = '<p style="color:var(--ink-soft)">暂无案例工作簿配置。</p>';
+      $("workbookModal").hidden = false;
       return;
     }
-    window.open(CONFIG.BASE_URL, "_blank");
+    var html = "";
+    WORKBOOK.forEach(function (cs, ci) {
+      html += '<div class="wb-case">';
+      html += '<div class="wb-case-head"><span class="wb-case-no">案例 ' + (ci + 1) + '</span><span class="wb-case-title">' + escapeHtml(cs.title) + '</span></div>';
+      if (cs.intro) html += '<div class="wb-case-intro">' + cs.intro + '</div>';
+      (cs.sections || []).forEach(function (sec) {
+        var d = DAYS[sec.date];
+        var drill = d && d.drill ? d.drill : null;
+        var saved = loadDrill(sec.date);
+        html += '<div class="wb-sec">';
+        html += '<div class="wb-sec-head"><span class="wb-sec-label sec-' + (sec.label) + '">' + escapeHtml(sec.label) + '</span>' +
+          '<span class="wb-sec-day">Day ' + (d ? d.day : "?") + ' · ' + sec.date + '</span></div>';
+        if (drill && drill.task) html += '<div class="wb-sec-task"><b>任务：</b>' + drill.task + '</div>';
+        html += '<div class="wb-sec-mine"><b>我的作答：</b>' + (saved && saved.text ? escapeHtml(saved.text).replace(/\n/g, "<br>") : '<span class="wb-empty">（还没写，去对应那天写）</span>') + '</div>';
+        if (drill && drill.reference) html += '<details class="wb-sec-ref"><summary>教练对照答案</summary>' + drill.reference + '</details>';
+        html += '</div>';
+      });
+      html += '</div>';
+    });
+    body.innerHTML = html;
+    $("workbookModal").hidden = false;
   }
 
   // ---------- 学习档案导出 / 导入 ----------
   function exportArchive() {
-    var data = { type: "ai-archive", version: 1, at: Date.now(), days: {} };
+    var data = { type: KEY + "-archive", version: 1, at: Date.now(), days: {} };
     MANIFEST.forEach(function (m) {
       var d = m.date;
       var read = function (k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch (e) { return null; } };
-      data.days[d] = { score: read(scoreKey(d)), ref: read(refKey(d)), ans: read(examAnsKey(d)) };
+      data.days[d] = { score: read(scoreKey(d)), ref: read(refKey(d)), ans: read(examAnsKey(d)), drill: read(drillKey(d)) };
     });
     var blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url;
-    a.download = "IPD学习档案_" + new Date().toISOString().slice(0, 10) + ".json";
+    a.download = (SITE.archiveName || "学习档案") + "_" + new Date().toISOString().slice(0, 10) + ".json";
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -704,9 +666,9 @@
           if (dd.score) localStorage.setItem(scoreKey(d), JSON.stringify(dd.score));
           if (dd.ref) localStorage.setItem(refKey(d), JSON.stringify(dd.ref));
           if (dd.ans) localStorage.setItem(examAnsKey(d), JSON.stringify(dd.ans));
+          if (dd.drill) localStorage.setItem(drillKey(d), JSON.stringify(dd.drill));
         });
-        renderSidebar(); updateProgress();
-        renderCalendar(); renderRecent30(); renderPlan();
+        renderSidebar(); updateProgress(); renderPlan();
         if (currentDate) { renderExam(DAYS[currentDate]); renderReflection(currentDate); }
         alert("档案已导入：共恢复 " + Object.keys(data.days).length + " 天的数据");
         scheduleAutoBackup();
@@ -715,9 +677,6 @@
     reader.readAsText(file);
   }
 
-  // 直接粘贴 DevTools 复制的内容（支持三种格式）：
-  //  A) 归档格式 {"days":{...}}  B) {"ipd_score_...":"...",...}（copy(JSON.stringify(localStorage)) 的输出）
-  //  C) 多行 "ipd_xxx: 值" 或 "ipd_xxx\t值"（DevTools 逐行复制）
   function setIfAbsent(key, obj) { if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(obj)); }
   function setIfAbsentRaw(key, rawVal) { if (!localStorage.getItem(key)) localStorage.setItem(key, rawVal); }
 
@@ -733,38 +692,36 @@
           if (dd.score) setIfAbsent(scoreKey(d), dd.score);
           if (dd.ref) setIfAbsent(refKey(d), dd.ref);
           if (dd.ans) setIfAbsent(examAnsKey(d), dd.ans);
+          if (dd.drill) setIfAbsent(drillKey(d), dd.drill);
           imported++;
         });
       } else if (typeof obj === "object" && obj !== null) {
         Object.keys(obj).forEach(function (k) {
-          if (k.indexOf("ai_") === 0) { setIfAbsentRaw(k, obj[k]); imported++; }
+          if (k.indexOf(KEY + "_") === 0) { setIfAbsentRaw(k, obj[k]); imported++; }
         });
       }
     } catch (e) {
       text.split(/\r?\n/).forEach(function (ln) {
-        var m = ln.match(/^(ipd_[A-Za-z0-9_]+)\s*[:=]\s*(.*)$/) || ln.match(/^(ipd_[A-Za-z0-9_]+)\t(.*)$/);
+        var m = ln.match(new RegExp("^(" + KEY + "_[A-Za-z0-9_]+)\\s*[:=]\\s*(.*)$")) || ln.match(new RegExp("^(" + KEY + "_[A-Za-z0-9_]+)\\t(.*)$"));
         if (m) { setIfAbsentRaw(m[1], m[2]); imported++; }
       });
     }
-    if (!imported) { $("importMsg").textContent = "没识别到 ipd_ 开头的数据，请确认粘贴内容来自 DevTools 的 localStorage"; return; }
-    renderSidebar(); updateProgress();
-    renderCalendar(); renderRecent30(); renderPlan();
+    if (!imported) { $("importMsg").textContent = "没识别到 " + KEY + "_ 开头的数据，请确认粘贴内容来自 DevTools 的 localStorage"; return; }
+    renderSidebar(); updateProgress(); renderPlan();
     if (currentDate) { renderExam(DAYS[currentDate]); renderReflection(currentDate); }
     $("importMsg").textContent = "✅ 成功恢复 " + imported + " 条数据，已合并进本浏览器（原有数据不会被覆盖）";
     scheduleAutoBackup();
   }
 
   // ---------- 自动备份（防换网址丢分） ----------
-  // 浏览器本地存储按"网址"隔离，CloudStudio 每次部署换网址会把成绩拆进不同保险箱。
-  // 解决办法：每次保存都自动把整套档案下载成一份文件存到电脑，换网址后用「📥 导入」即可恢复。
-  var AUTO_BACKUP_NAME = "AI学习档案-自动备份.json";
+  var AUTO_BACKUP_NAME = (SITE.archiveName || "学习档案") + "-自动备份.json";
   var _backupTimer = null;
   function buildArchive() {
-    var data = { type: "ai-archive", version: 1, at: Date.now(), days: {} };
+    var data = { type: KEY + "-archive", version: 1, at: Date.now(), days: {} };
     MANIFEST.forEach(function (m) {
       var d = m.date;
       var read = function (k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch (e) { return null; } };
-      data.days[d] = { score: read(scoreKey(d)), ref: read(refKey(d)), ans: read(examAnsKey(d)) };
+      data.days[d] = { score: read(scoreKey(d)), ref: read(refKey(d)), ans: read(examAnsKey(d)), drill: read(drillKey(d)) };
     });
     return data;
   }
@@ -784,91 +741,50 @@
     clearTimeout(t._h); t._h = setTimeout(function () { t.classList.remove("show"); }, 3200);
   }
   function scheduleAutoBackup() {
-    try { localStorage.setItem("ai_lastbackup_at", String(Date.now())); } catch (e) {}
+    try { localStorage.setItem(KEY + "_lastbackup_at", String(Date.now())); } catch (e) {}
     if (_backupTimer) clearTimeout(_backupTimer);
     _backupTimer = setTimeout(function () {
       try { triggerBackupDownload(); } catch (e) {}
     }, 1500);
   }
 
-  // ---------- 每周产出物评分卡（四维：功能性/成熟度/复用性/文档完整度，目标≥90） ----------
-  var OUT_DIMS = [
-    { k: "func", name: "功能性", desc: "是否真能跑、解决了真实问题" },
-    { k: "mature", name: "成熟度", desc: "是否稳定、边界清晰、可落地" },
-    { k: "reuse", name: "复用性", desc: "抽象得好不好、别人/其他场景能直接借" },
-    { k: "doc", name: "文档完整度", desc: "说明、示例、使用指引是否齐全" }
-  ];
-  function loadOutput(week) { try { return JSON.parse(localStorage.getItem("ai_output_week_" + week) || "null"); } catch (e) { return null; } }
-  function saveOutput(week, obj) { try { localStorage.setItem("ai_output_week_" + week, JSON.stringify(obj)); } catch (e) {} }
-  function sumScores(s) { if (!s) return 0; return (s.func || 0) + (s.mature || 0) + (s.reuse || 0) + (s.doc || 0); }
-
-  function renderOutput(date) {
-    var d = DAYS[date]; if (!d) return;
-    var week = Math.ceil((d.day || 1) / 7);
-    var box = $("panel-output");
-    var saved = loadOutput(week) || { note: "", scores: {} };
-    var html = '<p class="ref-hint">每周交 1 个用 AI 做出的真实产出物（技能 / 专家 / 自动化 / 分析报告等），按四维自评，目标总分 <b>≥ 90</b>（每项 /25）。完成后把自评 + 产出物链接发给豆包点评。</p>';
-    html += '<div class="out-week">🏗️ 第 ' + week + ' 周 · 产出物评分卡</div>';
-    html += '<div class="out-note"><textarea id="outNote" class="short-input" rows="3" placeholder="本周产出物是什么？一句话 + 链接即可">' + escapeHtml(saved.note || "") + '</textarea></div>';
-    html += '<div class="out-dims">';
-    OUT_DIMS.forEach(function (dim) {
-      var v = saved.scores ? (saved.scores[dim.k] || 0) : 0;
-      html += '<div class="dim-row"><div class="dim-name">' + dim.name + '<span class="dim-desc">' + dim.desc + '</span></div>' +
-        '<div class="dim-score"><input type="number" min="0" max="25" id="out_' + dim.k + '" class="dim-input" value="' + v + '" /> / 25</div></div>';
-    });
-    html += '</div>';
-    html += '<div class="out-total">当前总分：<b id="outTotal">' + sumScores(saved.scores) + '</b> / 100　（目标 ≥ 90）</div>';
-    html += '<div class="exam-actions"><button class="btn btn-primary" id="saveOut">保存本周评分卡</button><span class="ref-saved" id="outSaved"></span></div>';
-    box.innerHTML = html;
-    OUT_DIMS.forEach(function (dim) {
-      $("out_" + dim.k).oninput = function () { updateOutTotal(); };
-    });
-    $("saveOut").onclick = function () {
-      var scores = {};
-      OUT_DIMS.forEach(function (dim) { scores[dim.k] = Math.max(0, Math.min(25, parseInt(($("out_" + dim.k).value || "0"), 10) || 0)); });
-      saveOutput(week, { note: $("outNote").value, scores: scores, at: Date.now() });
-      $("outSaved").textContent = "已保存：" + new Date().toLocaleString();
-    };
-  }
-  function updateOutTotal() {
-    var t = 0;
-    OUT_DIMS.forEach(function (dim) { t += parseInt(($("out_" + dim.k) && $("out_" + dim.k).value) || "0", 10) || 0; });
-    if ($("outTotal")) $("outTotal").textContent = t;
-  }
-
   // ---------- 事件绑定 ----------
-  $("showAllRefBtn").onclick = openAllRef;
-  $("closeAllRef").onclick = function () { $("allRefModal").hidden = true; };
-  $("closeAllRef").setAttribute("aria-label", "关闭");
-  $("allRefModal").addEventListener("click", function (e) { if (e.target === $("allRefModal")) $("allRefModal").hidden = true; });
+  function bind() {
+    $("showAllRefBtn").onclick = openAllRef;
+    $("closeAllRef").onclick = function () { $("allRefModal").hidden = true; };
+    $("allRefModal").addEventListener("click", function (e) { if (e.target === $("allRefModal")) $("allRefModal").hidden = true; });
 
-  $("teamBoardBtn").onclick = function () {
-    if (!CONFIG.BASE_URL) { alert("团队榜尚未配置。配置后同事即可看榜+上报；当前自评/成绩可直接发给豆包点评。"); return; }
-    window.open(CONFIG.BASE_URL, "_blank");
-  };
-  $("copyReport").onclick = copyAndOpenBoard;
-  $("closeReport").onclick = function () { $("reportModal").hidden = true; };
-  $("reportModal").addEventListener("click", function (e) { if (e.target === $("reportModal")) $("reportModal").hidden = true; });
+    $("teamBoardBtn").onclick = function () { window.open(CONFIG.BASE_URL, "_blank"); };
+    $("copyReport").onclick = copyAndOpenBoard;
+    $("closeReport").onclick = function () { $("reportModal").hidden = true; };
+    $("reportModal").addEventListener("click", function (e) { if (e.target === $("reportModal")) $("reportModal").hidden = true; });
 
-  document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") {
-      if (!$("allRefModal").hidden) $("allRefModal").hidden = true;
-      if (!$("reportModal").hidden) $("reportModal").hidden = true;
-      if (!$("importModal").hidden) $("importModal").hidden = true;
-    }
-  });
+    $("workbookBtn").onclick = openWorkbook;
+    $("closeWorkbook").onclick = function () { $("workbookModal").hidden = true; };
+    $("workbookModal").addEventListener("click", function (e) { if (e.target === $("workbookModal")) $("workbookModal").hidden = true; });
 
-  $("exportBtn").onclick = exportArchive;
-  $("importBtn").onclick = function () { $("importModal").hidden = false; };
-  $("closeImport").onclick = function () { $("importModal").hidden = true; };
-  $("importModal").addEventListener("click", function (e) { if (e.target === $("importModal")) $("importModal").hidden = true; });
-  $("pickFileBtn").onclick = function () { $("importFile").click(); };
-  $("importFile").onchange = function (e) { if (e.target.files[0]) importArchive(e.target.files[0]); e.target.value = ""; };
-  $("importTextBtn").onclick = function () { importFromText($("importText").value); };
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") {
+        if (!$("allRefModal").hidden) $("allRefModal").hidden = true;
+        if (!$("reportModal").hidden) $("reportModal").hidden = true;
+        if (!$("importModal").hidden) $("importModal").hidden = true;
+        if (!$("workbookModal").hidden) $("workbookModal").hidden = true;
+      }
+    });
 
-  document.querySelectorAll(".tab").forEach(function (t) {
-    t.onclick = function () { switchTab(t.dataset.tab); };
-  });
+    $("exportBtn").onclick = exportArchive;
+    $("importBtn").onclick = function () { $("importModal").hidden = false; };
+    $("closeImport").onclick = function () { $("importModal").hidden = true; };
+    $("importModal").addEventListener("click", function (e) { if (e.target === $("importModal")) $("importModal").hidden = true; });
+    $("pickFileBtn").onclick = function () { $("importFile").click(); };
+    $("importFile").onchange = function (e) { if (e.target.files[0]) importArchive(e.target.files[0]); e.target.value = ""; };
+    $("importTextBtn").onclick = function () { importFromText($("importText").value); };
 
-  boot();
+    document.querySelectorAll(".tab").forEach(function (t) {
+      t.onclick = function () { switchTab(t.dataset.tab); };
+    });
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { bind(); boot(); });
+  else { bind(); boot(); }
 })();
